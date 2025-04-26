@@ -39,14 +39,23 @@
 
     const uploadedChunks = await getUploadedChunks(file.name)
     const needUploadChunks = []
-    await cutFile(file, uploadedChunks, ({ chunkIndex, chunkHash, chunkBlob, isUploaded }, isMerge) => {
+    await cutFile(file, uploadedChunks, ({ chunkIndex, chunkHash, chunkBlob, isUploaded }, chunkCount) => {
       needUploadChunks.push({ chunkIndex, chunkHash, chunkBlob, isUploaded })
-      uploadChunk(chunkIndex, chunkHash, chunkBlob, file.name, isMerge, needUploadChunks)
+
+      // 判断是否需要合并切片
+      if (isMergeChunks(uploadedChunks, chunkCount)) {
+        mergeChunks(file.name)
+        return
+      }
+
+      uploadChunk(chunkIndex, chunkHash, chunkBlob, file.name, needUploadChunks, chunkCount)
     })
 
   }
 
-  async function uploadChunk(chunkIndex, chunkHash, chunkBlob, fiilename, isMerge, chunks) {
+  async function uploadChunk(chunkIndex, chunkHash, chunkBlob, fiilename, chunks, chunkCount) {
+    if (!chunkBlob) return
+
     const formData = new FormData()
     formData.append('chunkIndex', chunkIndex)
     formData.append('chunkHash', chunkHash)
@@ -68,14 +77,21 @@
     const index = chunks.findIndex((item) => chunkIndex === item.chunkIndex)
     chunks[index].isUploaded = true
 
-    // if (!isMerge) return
-    const isAllUploaded = chunks.every((item) => item.isUploaded)
-    console.log(index, chunks[index], fiilename, isAllUploaded, 'isAllUploaded');
-    if (isAllUploaded) {
-      // 合并切片 
+    // 判断是否需要合并切片
+    if (isMergeChunks(chunks, chunkCount)) {
       mergeChunks(fiilename)
     }
 
+  }
+
+  // 判断是否需要合并切片
+  function isMergeChunks(chunks, chunkCount) {
+    if (chunks.length === chunkCount) {
+      const isAllUploaded = chunks.every(({ isUploaded }) => isUploaded)
+      return isAllUploaded
+    }
+
+    return false
   }
 
   // 合并切片

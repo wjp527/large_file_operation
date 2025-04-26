@@ -46,6 +46,11 @@ router.post('/upload', (req, res) => {
     if (fieldname === 'chunkIndex') chunkIndex = value
     if (fieldname === 'chunkHash') chunkHash = value
     if (fieldname === 'filename') filename = value
+    if (fieldname === 'fileBlob' && value === 'undefined') {
+      res.status(400).json({
+        msg: '文件切片数据不存在',
+      })
+    }
   })
   // 如果请求被中止，则删除正在写的分片
 
