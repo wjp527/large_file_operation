@@ -27,6 +27,19 @@
   }
 
 
+  let concurrentRequests = 0
+  const maxConcurrentRequests = 3
+  const requestQueue = []
+  async function processQueue() {
+    if (concurrentRequests >= maxConcurrentRequests || requestQueue.length === 0) return
+    const nextRequest = requestQueue.shift()
+    concurrentRequests++
+    await nextRequest()
+    concurrentRequests--
+    processQueue()
+
+  }
+
   async function uploadFile() {
     const fileInput = document.querySelector('#file')
     const file = fileInput.files[0]
@@ -48,7 +61,11 @@
         return
       }
 
-      uploadChunk(chunkIndex, chunkHash, chunkBlob, file.name, needUploadChunks, chunkCount)
+      if (chunkBlob) {
+        requestQueue.push(uploadChunk.bind(this, chunkIndex, chunkHash, chunkBlob, file.name, needUploadChunks, chunkCount))
+
+        processQueue()
+      }
     })
 
   }
