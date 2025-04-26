@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+
+<body>
+  <input type="file" id="file">
+  <button>提交</button>
+</body>
+
+<script type="module">
+  // 导入切片模块
+  import { cutFile } from './js/cutFile.js'
+
+  document.querySelector('button').addEventListener('click', uploadFile)
+
+
+  // 获取之前已经上传的切口，【断点续传】
+  async function getUploadedChunks(filename) {
+    const res = await fetch(`/file/getUploadedChunks?filename=${filename}`)
+    console.log(res, 'res');
+    return res.json()
+  }
+
+
+  async function uploadFile() {
+    const fileInput = document.querySelector('#file')
+    const file = fileInput.files[0]
+
+    if (!file) {
+      alert('请选择一个文件')
+      return
+
+    }
+
+    const uploadedChunks = await getUploadedChunks(file.name)
+    const needUploadChunks = []
+    await cutFile(file, uploadedChunks, ({ chunkIndex, chunkHash, chunkBlob, isUploaded }, isMerge) => {
+      needUploadChunks.push({ chunkIndex, chunkHash, chunkBlob, isUploaded })
+      uploadChunk(chunkIndex, chunkHash, chunkBlob, file.name, isMerge, needUploadChunks)
+    })
+
+  }
+
+  async function uploadChunk(chunkIndex, chunkHash, chunkBlob, fiilename, isMerge, chunks) {
+    const formData = new FormData()
+    formData.append('chunkIndex', chunkIndex)
+    formData.append('chunkHash', chunkHash)
+    formData.append('filename', fiilename)
+    formData.append('chunkBlob', chunkBlob)
+
+    console.log(formData, 'formData');
+
+    const res = await fetch('/file/upload', {
+      method: 'POST',
+      body: formData
+    })
+
+    if (!res.ok) {
+      alert('分片上传失败')
+      return
+    }
+
+    const index = chunks.findIndex((item) => chunkIndex === item.chunkIndex)
+    chunks[index].isUploaded = true
+
+    // if (!isMerge) return
+    const isAllUploaded = chunks.every((item) => item.isUploaded)
+    console.log(index, chunks[index], fiilename, isAllUploaded, 'isAllUploaded');
+    if (isAllUploaded) {
+      // 合并切片 
+      mergeChunks(fiilename)
+    }
+
+  }
+
+  // 合并切片
+  async function mergeChunks(filename) {
+    const res = await fetch('/file/merge', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ filename })
+    })
+
+    if (!res.ok) {
+      alert('合并失败')
+      return
+    } else {
+      alert('合并成功')
+    }
+  }
+
+</script>
+
+</html>
