@@ -4,28 +4,59 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Document</title>
+  <title>大文件上传 - 断点续传与秒传</title>
 </head>
 
 <body>
   <input type="file" id="file">
   <button>提交</button>
+  <div id="status"></div>
 </body>
 
 <script type="module">
   // 导入切片模块
   import { cutFile } from './js/cutFile.js'
 
+  // 获取状态显示元素
+  const statusEl = document.getElementById('status')
+
   document.querySelector('button').addEventListener('click', uploadFile)
 
+  // 计算整个文件的哈希值
+  function calculateFileHash(file) {
+    return new Promise((resolve, reject) => {
+      statusEl.textContent = '计算文件哈希中...'
+      const worker = new Worker('/js/hash-worker.js')
+      worker.postMessage({ file })
 
-  // 获取之前已经上传的切口，【断点续传】
-  async function getUploadedChunks(filename) {
-    const res = await fetch(`/file/getUploadedChunks?filename=${filename}`)
-    console.log(res, 'res');
+      worker.onmessage = e => {
+        if (e.data.error) {
+          reject(new Error(e.data.error))
+        } else {
+          resolve(e.data.hash)
+        }
+        worker.terminate()
+      }
+
+      worker.onerror = err => {
+        reject(err)
+        worker.terminate()
+      }
+    })
+  }
+
+  // 验证文件是否已存在（秒传功能）
+  async function verifyFileExists(fileHash, filename, fileSize) {
+    statusEl.textContent = '检查文件是否已存在...'
+    const res = await fetch(`/file/verify?fileHash=${fileHash}&filename=${filename}&fileSize=${fileSize}`)
     return res.json()
   }
 
+  // 获取之前已经上传的切片（断点续传）
+  async function getUploadedChunks(filename) {
+    const res = await fetch(`/file/getUploadedChunks?filename=${filename}`)
+    return res.json()
+  }
 
   // 并发请求数
   let concurrentRequests = 0
@@ -33,6 +64,7 @@
   const maxConcurrentRequests = 3
   // 请求队列
   const requestQueue = []
+
   // 处理请求队列
   async function processQueue() {
     if (concurrentRequests >= maxConcurrentRequests || requestQueue.length === 0) return
@@ -41,8 +73,8 @@
     await nextRequest()
     concurrentRequests--
     processQueue()
-
   }
+
   // 上传文件 
   async function uploadFile() {
     const fileInput = document.querySelector('#file')
@@ -51,42 +83,66 @@
     if (!file) {
       alert('请选择一个文件')
       return
-
     }
 
-    // 获取之前已经上传的切口，【断点续传】
-    const uploadedChunks = await getUploadedChunks(file.name)
-    // 需要上传的切片
-    const needUploadChunks = []
-    // 切分文件
-    await cutFile(file, uploadedChunks, ({ chunkIndex, chunkHash, chunkBlob, isUploaded }, chunkCount) => {
-      needUploadChunks.push({ chunkIndex, chunkHash, chunkBlob, isUploaded })
+    try {
+      // 1. 首先计算文件哈希值（用于秒传）
+      const fileHash = await calculateFileHash(file)
 
-      // 判断是否需要合并切片
-      if (isMergeChunks(uploadedChunks, chunkCount)) {
-        mergeChunks(file.name)
+      // 2. 验证文件是否已存在
+      const { exists, url } = await verifyFileExists(fileHash, file.name, file.size)
+
+      // 3. 文件已存在，直接返回（秒传成功）
+      if (exists) {
+        statusEl.textContent = '秒传成功！'
+        alert(`文件秒传成功：${url}`)
         return
       }
 
-      if (chunkBlob) {
-        requestQueue.push(uploadChunk.bind(this, chunkIndex, chunkHash, chunkBlob, file.name, needUploadChunks, chunkCount))
+      // 4. 文件不存在，执行正常上传流程
+      statusEl.textContent = '准备上传文件...'
 
-        processQueue()
-      }
-    })
+      // 获取之前已经上传的切片（断点续传）
+      const uploadedChunks = await getUploadedChunks(file.name)
 
+      // 需要上传的切片
+      const needUploadChunks = []
+
+      // 切分文件
+      await cutFile(file, uploadedChunks, ({ chunkIndex, chunkHash, chunkBlob, isUploaded }, chunkCount) => {
+        needUploadChunks.push({ chunkIndex, chunkHash, chunkBlob, isUploaded })
+
+        // 更新上传状态
+        statusEl.textContent = `准备上传: ${needUploadChunks.length}/${chunkCount} 切片`
+
+        // 判断是否需要合并切片
+        if (isMergeChunks(needUploadChunks, chunkCount)) {
+          mergeChunks(file.name, fileHash) // 添加fileHash参数
+          return
+        }
+
+        if (chunkBlob) {
+          requestQueue.push(uploadChunk.bind(this, chunkIndex, chunkHash, chunkBlob, file.name, needUploadChunks, chunkCount, fileHash))
+          processQueue()
+        }
+      })
+    } catch (error) {
+      statusEl.textContent = `上传错误: ${error.message}`
+      console.error('上传错误:', error)
+    }
   }
 
-  async function uploadChunk(chunkIndex, chunkHash, chunkBlob, fiilename, chunks, chunkCount) {
+  async function uploadChunk(chunkIndex, chunkHash, chunkBlob, filename, chunks, chunkCount, fileHash) {
     if (!chunkBlob) return
 
     const formData = new FormData()
     formData.append('chunkIndex', chunkIndex)
     formData.append('chunkHash', chunkHash)
-    formData.append('filename', fiilename)
+    formData.append('filename', filename)
+    formData.append('fileHash', fileHash) // 添加fileHash
     formData.append('chunkBlob', chunkBlob)
 
-    console.log(formData, 'formData');
+    statusEl.textContent = `正在上传切片 ${chunkIndex}...`
 
     const res = await fetch('/file/upload', {
       method: 'POST',
@@ -94,6 +150,7 @@
     })
 
     if (!res.ok) {
+      statusEl.textContent = `切片 ${chunkIndex} 上传失败`
       alert('分片上传失败')
       return
     }
@@ -101,11 +158,14 @@
     const index = chunks.findIndex((item) => chunkIndex === item.chunkIndex)
     chunks[index].isUploaded = true
 
+    // 计算已上传的切片数量
+    const uploadedCount = chunks.filter(chunk => chunk.isUploaded).length
+    statusEl.textContent = `已上传: ${uploadedCount}/${chunkCount} 切片`
+
     // 判断是否需要合并切片
     if (isMergeChunks(chunks, chunkCount)) {
-      mergeChunks(fiilename)
+      mergeChunks(filename, fileHash)
     }
-
   }
 
   // 判断是否需要合并切片
@@ -119,19 +179,26 @@
   }
 
   // 合并切片
-  async function mergeChunks(filename) {
+  async function mergeChunks(filename, fileHash) {
+    statusEl.textContent = '正在合并切片...'
+
     const res = await fetch('/file/merge', {
       method: 'POST',
       headers: {
         'content-type': 'application/json'
       },
-      body: JSON.stringify({ filename })
+      body: JSON.stringify({
+        filename,
+        fileHash // 添加fileHash
+      })
     })
 
     if (!res.ok) {
+      statusEl.textContent = '合并失败'
       alert('合并失败')
       return
     } else {
+      statusEl.textContent = '文件上传并合并成功'
       alert('合并成功')
     }
   }

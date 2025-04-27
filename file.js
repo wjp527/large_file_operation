@@ -15,7 +15,57 @@ if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true })
 }
 
+// 文件哈希映射存储（实际应用中应使用数据库）
+// 格式: { fileHash: { filename: 'xxx', path: 'xxx' } }
+const fileHashMap = {}
+
+// 初始化哈希映射（读取已有文件的哈希，实际应用中应从数据库加载）
+function initFileHashMap() {
+  try {
+    // 如果存在哈希映射文件，则加载它
+    const hashMapPath = path.join(__dirname, 'fileHashMap.json')
+    if (fs.existsSync(hashMapPath)) {
+      const data = fs.readFileSync(hashMapPath, 'utf8')
+      Object.assign(fileHashMap, JSON.parse(data))
+    }
+  } catch (error) {
+    console.error('初始化文件哈希映射失败:', error)
+  }
+}
+
+// 保存哈希映射到文件（实际应用中应保存到数据库）
+function saveFileHashMap() {
+  try {
+    const hashMapPath = path.join(__dirname, 'fileHashMap.json')
+    fs.writeFileSync(hashMapPath, JSON.stringify(fileHashMap, null, 2), 'utf8')
+  } catch (error) {
+    console.error('保存文件哈希映射失败:', error)
+  }
+}
+
+// 初始化哈希映射
+initFileHashMap()
+
 const router = express.Router()
+
+// 文件验证接口（秒传功能）
+router.get('/verify', (req, res) => {
+  const { fileHash, filename } = req.query
+
+  if (fileHash && fileHashMap[fileHash]) {
+    // 文件已存在，返回成功和文件路径
+    const fileInfo = fileHashMap[fileHash]
+    res.json({
+      exists: true,
+      url: `/uploads/${path.basename(fileInfo.path)}`,
+    })
+  } else {
+    // 文件不存在，需要上传
+    res.json({
+      exists: false,
+    })
+  }
+})
 
 router.get('/getUploadedChunks', (req, res) => {
   const { filename } = req.query
@@ -35,19 +85,20 @@ router.post('/upload', (req, res) => {
   const bb = busboy({
     headers: req.headers,
   })
-  let chunkIndex, chunkHash, filename, writeStream
+  let chunkIndex, chunkHash, filename, fileHash, writeStream
 
   req.on('aborted', () => {
     const chunkDir = path.join(UPLOAD_DIR, `${filename}_CHUNKS_FOLDER_MARK_`)
     const chunkPath = path.join(chunkDir, `chunk_${chunkIndex}`)
-    writeStream.end()
-    fsPromises.unlink(chunkPath)
+    writeStream && writeStream.end()
+    fs.existsSync(chunkPath) && fsPromises.unlink(chunkPath)
   })
 
   bb.on('field', (fieldname, value) => {
     if (fieldname === 'chunkIndex') chunkIndex = value
     if (fieldname === 'chunkHash') chunkHash = value
     if (fieldname === 'filename') filename = value
+    if (fieldname === 'fileHash') fileHash = value
     if (fieldname === 'fileBlob' && value === 'undefined') {
       res.status(400).json({
         msg: '文件切片数据不存在',
@@ -95,8 +146,7 @@ router.post('/upload', (req, res) => {
 })
 
 router.post('/merge', async (req, res) => {
-  console.log(123)
-  const { filename } = req.body
+  const { filename, fileHash } = req.body
 
   if (!filename) {
     return res.status(400).json({
@@ -115,7 +165,8 @@ router.post('/merge', async (req, res) => {
   const indexs = fs.readdirSync(chunkDir).map(name => parseInt(name.split('_')[1]))
   const indexSort = indexs.sort((a, b) => a - b)
   const unqieFilename = getUniqFilename(UPLOAD_DIR, filename)
-  const writeStream = fs.createWriteStream(path.join(UPLOAD_DIR, unqieFilename))
+  const finalFilePath = path.join(UPLOAD_DIR, unqieFilename)
+  const writeStream = fs.createWriteStream(finalFilePath)
 
   for (let index = 0; index < indexSort.length; index++) {
     const chunkPath = path.join(chunkDir, `chunk_${index}`)
@@ -127,6 +178,18 @@ router.post('/merge', async (req, res) => {
   // fs.rmdirSync(chunkDir)
 
   await removeDir(chunkDir)
+
+  // 如果提供了文件哈希，保存到哈希映射中（用于秒传）
+  if (fileHash) {
+    fileHashMap[fileHash] = {
+      filename: unqieFilename,
+      path: finalFilePath,
+    }
+
+    // 保存哈希映射
+    saveFileHashMap()
+  }
+
   res.sendStatus(200)
 })
 
