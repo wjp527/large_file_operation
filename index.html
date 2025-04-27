@@ -27,9 +27,13 @@
   }
 
 
+  // 并发请求数
   let concurrentRequests = 0
+  // 最大并发请求数
   const maxConcurrentRequests = 3
+  // 请求队列
   const requestQueue = []
+  // 处理请求队列
   async function processQueue() {
     if (concurrentRequests >= maxConcurrentRequests || requestQueue.length === 0) return
     const nextRequest = requestQueue.shift()
@@ -39,7 +43,7 @@
     processQueue()
 
   }
-
+  // 上传文件 
   async function uploadFile() {
     const fileInput = document.querySelector('#file')
     const file = fileInput.files[0]
@@ -50,8 +54,11 @@
 
     }
 
+    // 获取之前已经上传的切口，【断点续传】
     const uploadedChunks = await getUploadedChunks(file.name)
+    // 需要上传的切片
     const needUploadChunks = []
+    // 切分文件
     await cutFile(file, uploadedChunks, ({ chunkIndex, chunkHash, chunkBlob, isUploaded }, chunkCount) => {
       needUploadChunks.push({ chunkIndex, chunkHash, chunkBlob, isUploaded })
 

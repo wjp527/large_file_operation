@@ -22,7 +22,9 @@ router.get('/getUploadedChunks', (req, res) => {
   const chunkDir = path.join(UPLOAD_DIR, `${filename}_CHUNKS_FOLDER_MARK_`)
   let uploadedChunks = []
 
+  // 如果目录存在，则读取目录下的所有文件
   if (fs.existsSync(chunkDir)) {
+    // 读取目录下的所有文件，并返回文件名的索引
     uploadedChunks = fs.readdirSync(chunkDir).map(name => parseInt(name.split('_')[1]))
   }
 
